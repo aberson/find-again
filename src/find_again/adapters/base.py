@@ -44,6 +44,7 @@ from ..models import (
 )
 
 __all__ = [
+    "TEXT_EXTENSIONS",
     "Adapter",
     "AdapterResult",
     "ParsedDocument",
@@ -52,6 +53,13 @@ __all__ = [
     "select_adapter",
 ]
 
+# The Markdown/plain-text extension family, defined ONCE here so the generic
+# Markdown adapter (text.py) and every structured-family adapter (structured.py,
+# decision.py) share a single source of truth rather than re-declaring it and
+# drifting (dev/.claude/rules/code-quality.md -- one source of truth for
+# data-shape constants).
+TEXT_EXTENSIONS = frozenset({".md", ".markdown", ".mdown", ".mkd", ".txt", ".text"})
+
 
 def _suffix(source_path: str) -> str:
     """Lower-cased file extension (including the dot) of a POSIX source path."""
@@ -59,15 +67,21 @@ def _suffix(source_path: str) -> str:
 
 
 def decode_text(raw: bytes) -> str:
-    """Decode file bytes to text for indexing -- lenient, never raises.
+    """Decode file bytes to text for indexing -- lenient, NEVER raises.
 
     A UTF-8 BOM is stripped; otherwise strict UTF-8 is tried, falling back to
-    ``latin-1`` (which maps every byte 1:1 and never fails). Adapters that need to
-    reject genuinely-binary input check for NUL bytes themselves rather than rely
-    on a decode error, since ``latin-1`` would otherwise mojibake-index it.
+    ``latin-1`` (which maps every byte 1:1 and never fails). The BOM branch ALSO
+    falls back to ``latin-1`` if the post-BOM bytes are not valid UTF-8, so an
+    undecodable BOM'd file (or a head-peek slice truncated mid-multibyte-char) can
+    never make this raise. Adapters that must *reject* rather than mojibake-index
+    such input rely on :func:`_looks_binary` (which flags both a NUL byte and a
+    BOM-announced-but-undecodable file) to diagnose + skip it before calling here.
     """
     if raw.startswith(b"\xef\xbb\xbf"):
-        return raw.decode("utf-8-sig")
+        try:
+            return raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -75,14 +89,48 @@ def decode_text(raw: bytes) -> str:
 
 
 def _looks_binary(raw: bytes) -> bool:
-    """A NUL byte is the cheap, reliable signal that bytes are not text.
+    """True when bytes should be diagnosed + skipped rather than decoded as text.
 
-    Shared by every text-decoding adapter so genuinely-binary input mislabeled
-    with a text/JSON extension is diagnosed and skipped rather than mojibake-indexed
-    (``decode_text``'s ``latin-1`` fallback never fails, so a decode error can't be
-    relied on to catch it).
+    Two cheap, reliable signals:
+
+    * a NUL byte -- the classic marker that bytes are not text; and
+    * a leading UTF-8 BOM whose bytes do NOT decode as UTF-8 -- a file that
+      *announces* UTF-8 but isn't decodable is genuinely corrupt/undecodable (not
+      merely latin-1 text), so it is flagged too. This closes a never-raise hole:
+      without it, a BOM + invalid-UTF-8 (NUL-free) file slips past the NUL check and
+      ``decode_text``'s BOM branch would be the one to (previously) raise.
+
+    Shared by every text-decoding adapter so genuinely-binary or falsely-BOM'd input
+    mislabeled with a text/JSON extension is diagnosed and skipped rather than
+    mojibake-indexed (``decode_text``'s ``latin-1`` fallback never fails, so a decode
+    error alone can't be relied on to catch it).
     """
-    return b"\x00" in raw
+    if b"\x00" in raw:
+        return True
+    if raw.startswith(b"\xef\xbb\xbf"):
+        try:
+            raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return True
+    return False
+
+
+def _split_physical_lines(text: str) -> list[str]:
+    """Split ``text`` on PHYSICAL newlines (LF / CRLF) only -- never the Unicode ones.
+
+    Unlike ``str.splitlines()``, this does NOT break on U+2028 / U+2029 / U+0085 /
+    form-feed -- all legal, unescaped, inside prose and inside a heading's section
+    body. Splitting on those would shift every later section's ``path:line`` locator
+    away from the physical line a human sees when opening the file (the same drift
+    Step 3a's JSONL reader avoids by splitting on physical ``\\n`` only).
+
+    A trailing CR (the CR of a CRLF pair) is stripped from each line, and a single
+    trailing newline does NOT yield a phantom empty final line (matching
+    ``str.splitlines()``), so section line counts stay stable.
+    """
+    if text.endswith("\n"):
+        text = text[:-1]  # a lone trailing newline is not an extra empty line
+    return [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
 
 
 @dataclass(frozen=True, slots=True)

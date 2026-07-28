@@ -14,6 +14,7 @@ from typing import ClassVar
 
 from ..models import ArtifactType, Diagnostic, IndexedDocument, Locator, Severity, make_doc_id
 from .base import (
+    TEXT_EXTENSIONS,
     Adapter,
     AdapterResult,
     ParsedDocument,
@@ -23,8 +24,6 @@ from .base import (
     decode_text,
 )
 
-_TEXT_EXTENSIONS = frozenset({".md", ".markdown", ".mdown", ".mkd", ".txt", ".text"})
-
 
 class MarkdownAdapter(Adapter):
     """Generic Markdown/text adapter: whole-file body -> one searchable document."""
@@ -32,7 +31,7 @@ class MarkdownAdapter(Adapter):
     name: ClassVar[str] = "markdown"
 
     def handles(self, source: SourceFile) -> bool:
-        return _suffix(source.source_path) in _TEXT_EXTENSIONS
+        return _suffix(source.source_path) in TEXT_EXTENSIONS
 
     def parse(self, source: SourceFile) -> AdapterResult:
         if _looks_binary(source.raw):

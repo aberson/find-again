@@ -175,6 +175,7 @@ max_file_kb = 512
 - **Produces:** structured-family `adapters/`, malformed-input fixtures
 - **Done when:** every structured family emits searchable text and an openable path/line or record locator; corrupt inputs diagnose without aborting siblings
 - **Depends on:** 3a
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 4: Add incremental indexing and reconciliation
