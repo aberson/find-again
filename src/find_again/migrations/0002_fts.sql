@@ -1,0 +1,11 @@
+-- Migration 0002: full-text search index over document bodies.
+-- A standalone (content-owning) FTS5 table: it stores its OWN copy of `body`.
+-- Because the documents metadata table holds no body, that copy is the only
+-- copy -- there is no duplication -- and snippet()/highlight() excerpting works
+-- for the Step 5 search layer at no extra storage cost. This is deliberately
+-- NOT a contentless (content='') table: contentless FTS5 cannot return column
+-- text, so it could not produce the ranked excerpts the search step needs.
+-- Each FTS row's rowid is set equal to the documents.id it belongs to; the
+-- storage layer inserts, updates, and deletes both tables inside one
+-- transaction so metadata and full-text index never diverge.
+CREATE VIRTUAL TABLE documents_fts USING fts5(body);

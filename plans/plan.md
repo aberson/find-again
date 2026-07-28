@@ -151,6 +151,7 @@ max_file_kb = 512
 - **Produces:** `db.py`, migration files, database tests
 - **Done when:** one real document writes and reads through FTS, rollback preserves the prior index, and schema upgrades are deterministic
 - **Depends on:** 1
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 3a: Define the adapter contract and generic adapters
