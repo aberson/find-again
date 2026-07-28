@@ -133,7 +133,7 @@ max_file_kb = 512
 ### Step 1: Scaffold, configure roots, and define safety boundaries
 - **Problem:** Create the uv project, typed document/config shapes, explicit-root configuration (per §6 Configuration discovery), ignore handling, file-size limits, and the two-layer secret-exclusion contract (path-glob deny patterns plus content-based secret-pattern scan, per §6 Explicit roots).
 - **Type:** code
-- **Issue:** #
+- **Issue:** #1
 - **Files:** pyproject.toml, src/find_again/models.py, src/find_again/config.py, tests/
 - **Flags:** --reviewers deep --isolation worktree
 - **Produces:** scaffold, `models.py`, `config.py`, security fixtures
@@ -144,7 +144,7 @@ max_file_kb = 512
 ### Step 2: Build the SQLite and FTS storage layer
 - **Problem:** Implement migrations, indexed-document metadata, FTS5 content, hashes, timestamps, and transactional updates.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #2
 - **Files:** src/find_again/db.py, migrations/, tests/
 - **Flags:** --reviewers deep --isolation worktree
 - **Produces:** `db.py`, migration files, database tests
@@ -155,7 +155,7 @@ max_file_kb = 512
 ### Step 3a: Define the adapter contract and generic adapters
 - **Problem:** Define the single adapter-to-document contract (stable locators, diagnostics), then implement the generic Markdown/text and JSON/JSONL adapters against it with fixtures.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #3
 - **Files:** src/find_again/adapters/, tests/
 - **Flags:** --reviewers deep --isolation worktree
 - **Produces:** adapter contract, generic `adapters/`, malformed-input fixtures
@@ -166,7 +166,7 @@ max_file_kb = 512
 ### Step 3b: Implement the structured artifact-family adapters
 - **Problem:** Implement the plan, handoff/session, decision-record, incident, and memory adapters on Step 3a's contract. The decision-record adapter is a generic YAML-frontmatter Markdown adapter: it asserts only the indexed keys pinned as a format contract in Paper Trail's plan (`id`, `title`, `status`, `review_date` — `../../paper-trail/plans/plan.md`, schema frozen at its Step 1), tolerates unknown keys, and falls back to plain-Markdown indexing when no frontmatter parses. No build dependency on Paper Trail shipping: any producer emitting the same format is indexed identically.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #4
 - **Files:** src/find_again/adapters/, tests/
 - **Flags:** --reviewers deep --isolation worktree
 - **Produces:** structured-family `adapters/`, malformed-input fixtures
@@ -177,7 +177,7 @@ max_file_kb = 512
 ### Step 4: Add incremental indexing and reconciliation
 - **Problem:** Discover configured files, hash content, update changed documents, remove deleted documents, and expose index age and adapter diagnostics.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #5
 - **Files:** src/find_again/indexer.py, src/find_again/cli.py, tests/
 - **Flags:** --reviewers deep --isolation worktree
 - **Produces:** `indexer.py`, `find-again index/status`
@@ -188,7 +188,7 @@ max_file_kb = 512
 ### Step 5: Build search and filtering
 - **Problem:** Implement deterministic FTS queries with artifact/project/date filters, ranked excerpts, source locators, and text/JSON output.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #6
 - **Files:** src/find_again/search.py, src/find_again/cli.py, tests/
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `search.py`, `find-again search`
@@ -199,7 +199,7 @@ max_file_kb = 512
 ### Step 6: Run the real retrieval benchmark
 - **Problem:** Index a safe, explicit sample of the dev workspace and test the pre-registered prior-context queries below, exclusion behavior, refresh correctness, and time-to-recovery. Query-to-expected-source pairs are operator-supplied (pre-registered in the table below before this step builds), never dev-agent-invented; the harness is a standalone script, not a pytest module, so the default `uv run pytest -q` gate stays hermetic.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #7
 - **Files:** scripts/benchmark.py, docs/findings/v1-retrieval-benchmark.md
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `scripts/benchmark.py` (run via `uv run python scripts/benchmark.py`), `docs/findings/v1-retrieval-benchmark.md`
@@ -220,7 +220,7 @@ operator to confirm or replace before this step builds):
 ### Step 7: Operator recall UAT
 - **Problem:** The Step 6 benchmark is pre-registered and script-driven; only the operator can exercise genuine recall with queries the build never saw. Run 3-5 genuine "where did I write X" queries NOT in the Step 6 set.
 - **Type:** operator
-- **Issue:** #
+- **Issue:** #8
 - **Files:** docs/findings/v1-retrieval-benchmark.md
 - **Flags:** none
 - **Produces:** operator recall verdict appended to `docs/findings/v1-retrieval-benchmark.md` (no code artifacts)

@@ -1,0 +1,21 @@
+# Build/prep orchestration artifacts
+.build-step/
+
+# Derived local index (rebuildable; source artifacts remain authoritative — plan §6)
+.find-again/
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
