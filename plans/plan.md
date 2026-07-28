@@ -163,6 +163,7 @@ max_file_kb = 512
 - **Produces:** adapter contract, generic `adapters/`, malformed-input fixtures
 - **Done when:** Markdown/text and JSON/JSONL inputs emit searchable text and an openable path/line or record locator; corrupt inputs diagnose without aborting siblings
 - **Depends on:** 1
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 3b: Implement the structured artifact-family adapters
