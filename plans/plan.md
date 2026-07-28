@@ -139,6 +139,7 @@ max_file_kb = 512
 - **Produces:** scaffold, `models.py`, `config.py`, security fixtures
 - **Done when:** paths outside configured roots, ignored files, oversized files, and secret fixtures are excluded with visible diagnostics; a content-scan hit skips the entire file (never redact-and-index); exclusion diagnostics name path and pattern id only; and a fixture asserts the secret text reaches neither the database nor any diagnostic
 - **Depends on:** none
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 2: Build the SQLite and FTS storage layer

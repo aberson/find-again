@@ -1,0 +1,48 @@
+[project]
+name = "find-again"
+version = "0.1.0"
+description = "Local-first full-text retrieval over development-memory artifacts"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Abraham Robison" }]
+# Runtime is stdlib-only: sqlite3 + FTS5 for storage, tomllib for config.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+find-again = "find_again.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/find_again"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S"]
+# Tests may use assert (S101) and construct throwaway secret-shaped fixtures.
+per-file-ignores = { "tests/**" = ["S101", "S105", "S106"] }
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
