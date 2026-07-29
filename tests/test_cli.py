@@ -128,10 +128,15 @@ def test_no_command_prints_help_exit_2(capsys: pytest.CaptureFixture[str]) -> No
     assert "usage:" in capsys.readouterr().out.lower()
 
 
-def test_search_still_stubbed_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
-    code = main(["search", "anything"])
+def test_search_missing_config_is_exit_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # search now implemented (Step 5): a directory with no find-again.toml is still a
+    # config error (exit 2), consistent with index/status. Full search coverage lives
+    # in tests/test_search.py.
+    code = main(["--root", str(tmp_path), "search", "anything"])
     assert code == 2
-    assert "not implemented" in capsys.readouterr().err
+    assert "find-again:" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #

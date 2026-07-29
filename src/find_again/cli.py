@@ -1,15 +1,19 @@
 """Command-line entry point (plan.md §5 cli.py, §10 Build and Run Contract).
 
-The ``index`` and ``status`` verbs land here (Step 4); ``search`` remains a stub
-until Step 5. ``index`` resolves the target root, loads config, and reconciles the
-index (:func:`find_again.indexer.refresh_index`), reporting new/updated/unchanged/
-removed counts plus diagnostics. ``status`` reports index age, document count, a
-per-diagnostic summary, and the configured roots. Both support ``--json`` (machine
-output) and a human text form, and use sane exit codes:
+The ``index``, ``search``, and ``status`` verbs land here. ``index`` resolves the
+target root, loads config, and reconciles the index
+(:func:`find_again.indexer.refresh_index`), reporting new/updated/unchanged/removed
+counts plus diagnostics. ``search`` runs a deterministic FTS query
+(:func:`find_again.search.search`) with artifact/project/date filters over the
+resolved-root index and renders ranked excerpts + openable locators. ``status``
+reports index age, document count, a per-diagnostic summary, and the configured
+roots. All support ``--json`` (machine output) and a human text form, and use sane
+exit codes:
 
-* ``0`` -- success.
-* ``2`` -- configuration / root-resolution failure (bad or missing config, no repo
-  and no ``--root``, a schema newer than this build).
+* ``0`` -- success (including a clean no-results search).
+* ``2`` -- configuration / root-resolution / usage failure (bad or missing config,
+  no repo and no ``--root``, a schema newer than this build, a bad ``--since`` /
+  ``--until`` / ``--limit`` value).
 * ``1`` -- an unexpected storage/database failure.
 """
 
@@ -26,7 +30,15 @@ from . import __version__
 from .config import Config, ConfigError, load_config, resolve_root
 from .db import Database, DatabaseError, NewerDatabaseError
 from .indexer import RefreshResult, refresh_index
-from .models import Diagnostic
+from .models import ArtifactType, Diagnostic, SearchResult
+from .search import (
+    DEFAULT_LIMIT,
+    SEARCH_SCHEMA_VERSION,
+    SearchQuery,
+    normalize_date_bound,
+    result_to_dict,
+    search,
+)
 
 __all__ = ["build_parser", "main"]
 
@@ -56,10 +68,55 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the git-ignore check (path-glob + content secret layers still apply).",
     )
-    search = subparsers.add_parser("search", help="Search the index for a query.")
-    search.add_argument("query", help="Full-text query string.")
+    search_parser = subparsers.add_parser("search", help="Search the index for a query.")
+    search_parser.add_argument("query", help="Full-text query string (plain terms; AND-ed).")
+    search_parser.add_argument(
+        "--type",
+        action="append",
+        dest="types",
+        default=None,
+        metavar="TYPE",
+        choices=[artifact_type.value for artifact_type in ArtifactType],
+        help="Filter by artifact type (repeatable; OR-ed). One of: "
+        + ", ".join(artifact_type.value for artifact_type in ArtifactType),
+    )
+    search_parser.add_argument(
+        "--project",
+        default=None,
+        help="Filter to a single owning project.",
+    )
+    search_parser.add_argument(
+        "--since",
+        default=None,
+        metavar="DATE",
+        help="Only results at/after this date or ISO timestamp (inclusive).",
+    )
+    search_parser.add_argument(
+        "--until",
+        default=None,
+        metavar="DATE",
+        help="Only results at/before this date or ISO timestamp (inclusive).",
+    )
+    search_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=DEFAULT_LIMIT,
+        metavar="N",
+        help=f"Maximum number of results (default: {DEFAULT_LIMIT}).",
+    )
     subparsers.add_parser("status", help="Show index age, document count, and diagnostics.")
     return parser
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for ``--limit``: a strictly positive integer (else a usage error)."""
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {parsed}")
+    return parsed
 
 
 # --------------------------------------------------------------------------- #
@@ -207,6 +264,66 @@ def _run_status(args: argparse.Namespace, root: Path, config: Config) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# search
+# --------------------------------------------------------------------------- #
+def _build_search_query(args: argparse.Namespace) -> SearchQuery:
+    """Assemble a :class:`SearchQuery` from parsed args (raises ``ValueError`` on bad dates).
+
+    ``--type`` values are validated by argparse ``choices`` (safe to map straight to
+    the enum); ``--since`` / ``--until`` are normalized here so an unparseable date
+    surfaces as a usage error.
+    """
+    types = tuple(ArtifactType(value) for value in (args.types or ()))
+    since = None if args.since is None else normalize_date_bound(args.since, end=False)
+    until = None if args.until is None else normalize_date_bound(args.until, end=True)
+    return SearchQuery(
+        query=args.query,
+        artifact_types=types,
+        project=args.project,
+        since=since,
+        until=until,
+        limit=args.limit,
+    )
+
+
+def _print_search_text(query: str, results: list[SearchResult], *, empty_index: bool) -> None:
+    if not results:
+        print(f'No matches for "{query}".')
+        if empty_index:
+            print("  (the index is empty -- run `find-again index` first)")
+        return
+    noun = "result" if len(results) == 1 else "results"
+    print(f'{len(results)} {noun} for "{query}":')
+    for position, result in enumerate(results, start=1):
+        print(f"{position}. {result.locator.rendered()}  ({result.type.value}, {result.timestamp})")
+        excerpt = " ".join(result.excerpt.split())  # collapse newlines for a one-line excerpt
+        if excerpt:
+            print(f"   {excerpt}")
+
+
+def _run_search(args: argparse.Namespace, root: Path, config: Config) -> int:
+    query = _build_search_query(args)
+    with Database.open_root(root) as db:
+        results = search(db, query)
+        empty_index = db.count_documents() == 0
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": SEARCH_SCHEMA_VERSION,
+                    "query": query.query,
+                    "count": len(results),
+                    "results": [result_to_dict(result) for result in results],
+                },
+                indent=2,
+            )
+        )
+    else:
+        _print_search_text(query.query, results, empty_index=empty_index)
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
@@ -218,10 +335,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
-    if args.command == "search":
-        print("find-again search: not implemented yet (Step 5).", file=sys.stderr)
-        return 2
-
     try:
         root, config = _resolve(args)
     except ConfigError as exc:
@@ -231,7 +344,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "index":
             return _run_index(args, root, config)
+        if args.command == "search":
+            return _run_search(args, root, config)
         return _run_status(args, root, config)
+    except ValueError as exc:
+        # A bad --since / --until date is a usage-class failure (exit 2), consistent
+        # with the argparse-validated --type / --limit checks.
+        print(f"find-again: {exc}", file=sys.stderr)
+        return 2
     except NewerDatabaseError as exc:
         # A schema newer than this build is a usage/config-class failure (exit 2),
         # consistent with the config schema_version policy and the docstring above.

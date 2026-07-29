@@ -199,6 +199,7 @@ max_file_kb = 512
 - **Produces:** `search.py`, `find-again search`
 - **Done when:** seeded retrieval queries return the expected source in the top five and every result includes type, timestamp, excerpt, and locator
 - **Depends on:** 4
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 6: Run the real retrieval benchmark
