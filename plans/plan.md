@@ -211,6 +211,7 @@ max_file_kb = 512
 - **Produces:** `scripts/benchmark.py` (run via `uv run python scripts/benchmark.py`), `docs/findings/v1-retrieval-benchmark.md`
 - **Done when:** each pre-registered benchmark target is recovered in under 60 seconds, secret/ignored fixtures remain absent, and stale/deleted results do not survive refresh
 - **Depends on:** 5
+- **Status:** DONE (2026-07-27) — benchmark ran; safety (exclusion + refresh) PASS, all queries <60s; 3/5 targets in top-5, the 2 misses are ranking/corpus-composition (retrievable but outranked, documented v1.1); a real over-exclusion bug (high-entropy scanner false-positive dropping 29 files) was surfaced + fixed (secure, base64 bypass closed)
 
 Pre-registered benchmark targets (operator-supplied; the draft rows below are candidates for the
 operator to confirm or replace before this step builds):

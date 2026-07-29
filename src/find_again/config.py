@@ -372,9 +372,62 @@ SECRET_CONTENT_PATTERNS: tuple[SecretPattern, ...] = (
     ),
 )
 
-# Contiguous token-shaped run used by the high-entropy fallback.
-_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{40,}")
-_HIGH_ENTROPY_BITS = 4.2
+# Contiguous run considered by the generic high-entropy fallback. Path and
+# identifier separators (``/ \ - _ .``) are INCLUDED in the class so a full path
+# or a dotted / kebab / snake identifier is captured as ONE run and then rejected
+# by its (low) entropy below -- rather than silently split into <40-char pieces.
+# Keeping ``/`` and ``\`` in the class is also security-load-bearing: a
+# standard-base64 secret embeds ``/`` (its alphabet is ``A-Za-z0-9+/``), so a run
+# that stopped at ``/`` would split the secret into two sub-40-char fragments that
+# each evade this floor. As one run, the secret's high entropy is measured intact.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_.\\-]{40,}")
+
+# Word-separators that structure readable identifiers (kebab / snake / dotted). A
+# random secret carries few of these; a readable identifier is dominated by them.
+_IDENTIFIER_SEPARATORS = ("-", "_", ".")
+
+# Raised entropy floor (was 4.2). Genuinely-random mixed-class tokens sit well
+# above 5 bits/char; the long readable path/identifier strings that fill
+# dev-memory docs sit around 4.3-4.4, so 4.6 excludes those without losing real
+# random secrets.
+_HIGH_ENTROPY_BITS = 4.6
+# A candidate must carry at least this many NON-separator chars -- enough random
+# body to be a plausible secret rather than a hyphenated phrase. A conservative
+# floor: with length >= 40 and separators a minority it is already satisfied, but
+# it pins the "must have a real random body" invariant explicitly.
+_MIN_RANDOM_CHARS = 32
+# ...and separators must stay a MINORITY. Above this share the run reads as
+# separated words (a structured identifier), not a random token. Measured against
+# real dev-memory slugs (14-16% separators) vs. base64url randoms (~3-7%).
+_MAX_SEPARATOR_SHARE = 0.10
+
+# Nested-path guard (fa6 follow-up). The entropy floor alone clears SHALLOW readable
+# paths (~4.2-4.5 bits/char) but a DEEPLY-nested mixed-case path
+# (``.../CurrentVersion/Uninstall/...``, a timestamped ``.judge-motion`` dir) can edge
+# to ~4.6-4.8 and would then be mis-flagged. So a run that reads as a nested path --
+# several ``/``/``\``-delimited segments that each contain a real lowercase word -- is
+# skipped. A standard-base64 secret bearing a stray ``/`` does NOT qualify: its
+# slash-delimited chunks alternate case with digits and essentially never hold a
+# 4-letter lowercase word in >= 3 separate segments (measured false-negative rate on
+# 500k random base64 secrets: ~0.03-0.07%, and 0% for base64url). This keys on
+# path *vocabulary*, not a fragile entropy cutoff, so it does not reopen the
+# base64-with-slash hole the removed slash-skip left.
+_PATH_SEGMENT_RE = re.compile(r"[/\\]")
+_READABLE_WORD_RE = re.compile(r"[a-z]{4,}")
+_MIN_READABLE_PATH_SEGMENTS = 3
+
+
+def _reads_as_nested_path(run: str) -> bool:
+    """True if ``run`` reads as a nested filesystem path rather than a random token.
+
+    Splits on ``/``/``\\`` and counts segments holding a >= 4-char lowercase word run.
+    ``>= _MIN_READABLE_PATH_SEGMENTS`` such segments (e.g. ``docs`` / ``reviews`` /
+    ``utility``) => a path; a slash-bearing base64 secret has none across that many
+    segments. Deliberately keys on readable path *words*, not entropy: a raw
+    entropy cutoff can't tell a deeply-nested mixed-case path from a random blob.
+    """
+    readable = sum(1 for seg in _PATH_SEGMENT_RE.split(run) if _READABLE_WORD_RE.search(seg))
+    return readable >= _MIN_READABLE_PATH_SEGMENTS
 
 
 def _shannon_entropy(text: str) -> float:
@@ -386,19 +439,62 @@ def _shannon_entropy(text: str) -> float:
 
 
 def _has_high_entropy_token(text: str) -> bool:
-    """True if ``text`` holds a long, mixed-class, high-entropy token.
+    r"""True if ``text`` holds a long, mixed-class, GENUINELY-RANDOM high-entropy run.
 
-    Requires length >= 40, Shannon entropy >= 4.2 bits/char, and all three of
-    lower/upper/digit present. This catches random API secrets while skipping
-    prose (contains spaces, never forms a 40-char run), lowercase hex hashes
-    (two char classes), and UUIDs (low entropy).
+    Conservative by design. The specific vendor / connection-string / PEM / AWS /
+    JWT / assigned-credential patterns above are the real secret detectors; this
+    generic fallback exists only to catch an un-prefixed random blob, and must NOT
+    fire on the long path/identifier strings that fill dev-memory docs (e.g. a
+    56-char ``Alpha4Gate/.../feedback_grade`` path slug or an 85-char
+    ``c--Users-.../feedback_..._grade`` reference). Over-skipping those silently
+    drops the whole file from the index -- a real retrieval gap -- which is why the
+    *shape* of a random secret is required here, not merely high entropy.
+
+    Crucially there is NO blanket ``/``/``\`` path-skip: a run containing a slash is
+    scored like any other, because a standard-base64 secret (whose alphabet includes
+    ``/``) would otherwise slip in un-scanned -- a false-NEGATIVE worse than the
+    path-drop such a skip prevents (a secret indexed > a doc dropped). Keeping
+    ``/``/``\`` INSIDE :data:`_TOKEN_RE` (below) so the whole path/secret is one run,
+    then discriminating structurally, is what closes that hole. Readable paths are
+    excluded two ways instead: SHALLOW ones fall under the entropy floor
+    (~4.2-4.5 bits/char), and DEEPLY-nested mixed-case ones that edge over it are
+    caught by :func:`_reads_as_nested_path` (they read as several ``/``-delimited
+    word segments; a random secret does not).
+
+    A run qualifies as a secret only when ALL hold:
+
+    * length >= 40 (via :data:`_TOKEN_RE`);
+    * **not separator-dominated** -- ``-`` ``_`` ``.`` are a minority (<= 10%), so a
+      kebab / snake / dotted identifier is excluded;
+    * carries a substantial random body -- at least ``_MIN_RANDOM_CHARS``
+      non-separator chars;
+    * **does not read as a nested path** -- fewer than
+      ``_MIN_READABLE_PATH_SEGMENTS`` ``/``/``\``-delimited word segments;
+    * mixes all three of lower / upper / digit; and
+    * Shannon entropy >= ``_HIGH_ENTROPY_BITS`` bits/char.
+
+    This still catches random API secrets (including standard-base64 blobs bearing
+    ``/``) while skipping prose (spaces break the run), lowercase hex hashes (one
+    case class), UUIDs (too short / low entropy), and -- via the entropy floor plus
+    the nested-path guard -- long readable path/identifier strings.
     """
     for match in _TOKEN_RE.finditer(text):
-        token = match.group(0)
-        has_lower = any(c.islower() for c in token)
-        has_upper = any(c.isupper() for c in token)
-        has_digit = any(c.isdigit() for c in token)
-        if has_lower and has_upper and has_digit and _shannon_entropy(token) >= _HIGH_ENTROPY_BITS:
+        run = match.group(0)
+        separators = sum(run.count(sep) for sep in _IDENTIFIER_SEPARATORS)
+        # Separator-dominated -> a readable structured identifier, not a secret.
+        if separators / len(run) > _MAX_SEPARATOR_SHARE:
+            continue
+        # Must have a substantial random (non-separator) body.
+        if len(run) - separators < _MIN_RANDOM_CHARS:
+            continue
+        # Nested path of readable words (deeply-nested paths can edge over the
+        # entropy floor) -> not a secret. A slash-bearing base64 blob does not.
+        if _reads_as_nested_path(run):
+            continue
+        has_lower = any(c.islower() for c in run)
+        has_upper = any(c.isupper() for c in run)
+        has_digit = any(c.isdigit() for c in run)
+        if has_lower and has_upper and has_digit and _shannon_entropy(run) >= _HIGH_ENTROPY_BITS:
             return True
     return False
 

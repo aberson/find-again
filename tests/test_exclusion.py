@@ -334,6 +334,165 @@ def test_benign_high_entropy_strings_do_not_over_skip(benign: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Benchmark Step-6 regression: the generic high-entropy fallback must NOT flag
+# the long path / slug / kebab-snake identifier strings that fill dev-memory docs
+# (they made the scanner drop 29 files incl. docs/lessons-learned.md). Only the
+# generic fallback is tuned; every specific secret pattern stays UNCHANGED.
+# --------------------------------------------------------------------------- #
+# Content shaped like real dev-memory docs (docs/lessons-learned.md): long
+# slash-path slugs (56- and 85-char shapes the benchmark flagged) plus bare
+# 40+char snake_case identifiers with NO slash (to exercise the separator-share /
+# entropy gates, not merely the path guard). None of these is a secret.
+_PATHY_MEMORY_DOC = (
+    "# Lessons learned\n\n"
+    "See `Alpha4Gate/bots/reference_bot/memory/feedback_grade_reachability` for the grader.\n"
+    "Cross-ref `../../c--Users-abero-dev-Alpha4Gate/memory/"
+    "feedback_verify_primary_source_in_writing` for the writing rule.\n"
+    "Also `c--Users-abero-dev/memory/feedback_grade_when_worth_it_capture_pattern_grade`.\n"
+    "Bare identifiers (no slash): feedback_optimize_for_llm_over_human_noise, "
+    "feedback_win_capture_when_worth_it_established, "
+    "reference_themed_svg_readme_diagrams_light_and_dark.\n"
+    "Windows path: C:\\Users\\abero\\dev\\worktree_build-step-fa6-1785291567\\src.\n"
+    # A DEEPLY-nested mixed-case path whose raw entropy edges ABOVE the 4.6 floor
+    # (~4.66): the entropy floor alone does NOT clear it -- only the nested-path
+    # guard (>= 3 slash-delimited word segments) does. Regression cover for the fa6
+    # follow-up (removing the '/'-skip re-flagged 11 such deep paths on the real
+    # workspace until the guard was added). Not a secret.
+    "Artifact: `Alpha4Gate/.judge-motion/20260720-220637-dashboard-critical/verdict.md`.\n"
+)
+# A genuinely-random high-entropy token: no path chars, no word-separator
+# structure. This is a real secret shape and MUST stay skipped.
+_RANDOM_TOKEN = "aB3dE5fG7hJ9kM1nP2qR4sT6uV8wX0yZbC4dF6gH8jK2"
+# A standard-base64 secret whose alphabet includes '/' (base64-std is A-Za-z0-9+/).
+# ~50% of base64 tokens carry a '/', entropy ~5.2. The fa6 tuning briefly added a
+# blanket '/'-path-skip that let this shape slip into the index UN-scanned -- a
+# false-NEGATIVE worse than the path-drop it fixed (a secret indexed > a doc
+# dropped). Removing the skip re-closed the hole; the raised 4.6 entropy floor
+# keeps readable slash-paths clear. Assembled from fragments so no contiguous
+# secret-looking literal is committed. This MUST be flagged.
+_BASE64_SLASH_TOKEN = "aB3dE5f" + "/" + "G7hJ9kM1nP2qR4sT6" + "uV8wX0yZbC4dF6gH8jK2"
+
+
+def test_pathy_memory_content_is_not_flagged_as_secret() -> None:
+    # (a) A file full of long path/slug/kebab-snake identifiers must scan clean.
+    assert scan_secret_content(_PATHY_MEMORY_DOC) is None
+
+
+def test_pathy_memory_file_indexes(tmp_path: Path) -> None:
+    # (a) end-to-end: lessons-learned.md-style content INDEXES (not dropped).
+    config = _config(tmp_path)
+    target = _write(tmp_path / "docs" / "lessons-learned.md", _PATHY_MEMORY_DOC)
+    decision = evaluate_file(config, target)
+    assert decision.include is True
+    assert decision.diagnostic is None
+
+
+def test_random_high_entropy_token_still_skipped(tmp_path: Path) -> None:
+    # (b) A real random token (no path/word structure) is STILL caught by the
+    # generic fallback and the whole file is dropped.
+    assert scan_secret_content(f"# doc\n\nblob {_RANDOM_TOKEN} recorded\n") == "high-entropy-token"
+    config = _config(tmp_path)
+    target = _write(tmp_path / "docs" / "blob.md", f"# doc\n\n{_RANDOM_TOKEN}\n{_BODY_MARKER}\n")
+    decision = evaluate_file(config, target)
+    assert decision.include is False
+    assert decision.diagnostic is not None
+    assert decision.diagnostic.code == "secret-content"
+    assert _RANDOM_TOKEN not in decision.diagnostic.message
+
+
+def test_base64_std_secret_with_slash_is_flagged(tmp_path: Path) -> None:
+    # (b') fa6 regression: a standard-base64 secret CONTAINING '/' (mixed class,
+    # >= 32 random chars, entropy >= 4.6) is caught by the generic fallback. The
+    # earlier blanket '/'-skip let it evade with NO specific-pattern backstop; the
+    # slash is now scored like any other char, so the whole run's high entropy is
+    # measured and the file is dropped whole.
+    assert "/" in _BASE64_SLASH_TOKEN  # guard: the fixture actually exercises the hole
+    body = f"# doc\n\nblob {_BASE64_SLASH_TOKEN} recorded\n"
+    assert scan_secret_content(body) == "high-entropy-token"
+    config = _config(tmp_path)
+    file_body = f"# doc\n\n{_BASE64_SLASH_TOKEN}\n{_BODY_MARKER}\n"
+    target = _write(tmp_path / "docs" / "b64.md", file_body)
+    decision = evaluate_file(config, target)
+    assert decision.include is False  # whole file dropped, never redact-and-index
+    assert decision.diagnostic is not None
+    assert decision.diagnostic.code == "secret-content"
+    assert _BASE64_SLASH_TOKEN not in decision.diagnostic.message
+
+
+def test_slash_path_still_indexes_after_slash_skip_removed(tmp_path: Path) -> None:
+    # Counterpart to the above: removing the '/'-skip must NOT regress the pathy
+    # docs. A slash-bearing path slug (entropy ~4.2-4.5, below the 4.6 floor) still
+    # scans clean and its file still indexes -- the entropy floor, not a path-skip,
+    # is what keeps readable paths searchable.
+    slug_doc = (
+        "# ref\n\nSee `Alpha4Gate/bots/reference_bot/memory/feedback_grade_reachability` "
+        "and `c--Users-abero-dev/memory/feedback_grade_when_worth_it_capture_pattern`.\n"
+    )
+    assert scan_secret_content(slug_doc) is None
+    config = _config(tmp_path)
+    target = _write(tmp_path / "docs" / "refs.md", slug_doc)
+    decision = evaluate_file(config, target)
+    assert decision.include is True
+    assert decision.diagnostic is None
+
+
+@pytest.mark.parametrize(
+    "deep_path",
+    [
+        "Alpha4Gate/.judge-motion/20260720-220637-dashboard-critical/verdict.md",
+        "docs/investigations/skill-eval-setup-redesign/2026-05-24/PROPOSAL.md",
+        "/Users/abero/dev/Alpha4Gate/documentation/archived/soak-2026-04-11-fix",
+    ],
+)
+def test_deeply_nested_path_over_entropy_floor_still_indexes(
+    tmp_path: Path, deep_path: str
+) -> None:
+    # fa6 follow-up: removing the '/'-skip re-flagged 11 real-workspace files whose
+    # DEEPLY-nested mixed-case paths edge ABOVE the 4.6 entropy floor (~4.6-4.8). The
+    # entropy floor alone does NOT clear these -- the nested-path guard (>= 3
+    # slash-delimited word segments) does. They must scan clean and index; a random
+    # secret bearing a stray slash still does not (see the base64-slash test above).
+    doc = f"# doc\n\nsee `{deep_path}` for the artifact\n"
+    assert scan_secret_content(doc) is None
+    config = _config(tmp_path)
+    target = _write(tmp_path / "docs" / "deep.md", doc)
+    decision = evaluate_file(config, target)
+    assert decision.include is True
+    assert decision.diagnostic is None
+
+
+def test_high_leaks_caught_by_specific_patterns_not_entropy_fallback() -> None:
+    # (c) The 2 Step-1 HIGH leaks stay closed via their SPECIFIC patterns (the
+    # security guarantee is independent of the tuned entropy fallback).
+    assert scan_secret_content(f"url = {_PG_CONN_SECRET}\n") == "connection-string-credential"
+    assert scan_secret_content(f"key = {_STRIPE_KEY}\n") == "vendor-api-token"
+
+
+def test_pathy_doc_mixed_with_random_secret_still_drops_whole_file(tmp_path: Path) -> None:
+    # (d) Extended leak fixture: pathy content alone indexes, but when a real
+    # random secret is embedded the WHOLE file is dropped and the secret VALUE
+    # reaches neither the index nor any diagnostic.
+    config = _config(tmp_path)
+    clean = _write(tmp_path / "docs" / "memory.md", _PATHY_MEMORY_DOC)
+    leaky = _write(
+        tmp_path / "docs" / "mixed.md",
+        f"{_PATHY_MEMORY_DOC}\nEmbedded blob: {_RANDOM_TOKEN}\n{_BODY_MARKER}\n",
+    )
+
+    bodies, diagnostics = _simulate_index(config, [clean, leaky])
+
+    # Only the clean pathy doc is indexed; the mixed file is dropped whole.
+    assert len(bodies) == 1
+    assert "Lessons learned" in bodies[0]
+    haystack_index = "\n".join(bodies)
+    haystack_diag = "\n".join(diagnostics)
+    for needle in (_RANDOM_TOKEN, _BODY_MARKER):
+        assert needle not in haystack_index
+        assert needle not in haystack_diag
+    assert "docs/mixed.md" in haystack_diag
+
+
+# --------------------------------------------------------------------------- #
 # Finding 1 -- each high-value shape is skipped WHOLE (secret in neither the
 # to-be-indexed body nor the diagnostic); path-glob shapes short-circuit read.
 # --------------------------------------------------------------------------- #
