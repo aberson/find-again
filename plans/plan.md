@@ -187,6 +187,7 @@ max_file_kb = 512
 - **Produces:** `indexer.py`, `find-again index/status`
 - **Done when:** unchanged files are skipped, changed and deleted files reconcile correctly, and interrupted refresh does not leave partial state
 - **Depends on:** 2, 3b
+- **Status:** DONE (2026-07-27)
 
 <!-- autofix-applied: 2026-07-25 -->
 ### Step 5: Build search and filtering

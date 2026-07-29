@@ -35,11 +35,11 @@ import contextlib
 import functools
 import importlib.resources
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from types import TracebackType
 
-from .models import ArtifactType, IndexedDocument
+from .models import ArtifactType, Diagnostic, IndexedDocument, Severity
 
 __all__ = [
     "DB_DIRNAME",
@@ -465,3 +465,117 @@ class Database:
             ).fetchone()[0]
         )
         return orphan_meta == 0 and orphan_fts == 0
+
+    # -- incremental reconciliation (Step 4 indexer support) ---------------- #
+    def iter_document_index(self) -> Iterator[tuple[str, str, str]]:
+        """Yield ``(doc_id, source_path, content_hash)`` for every stored document.
+
+        The refresh reconciler reads this once at the start of a run to build its
+        prior-state snapshot (which files changed, which vanished). Bodies are not
+        read -- only the metadata the incremental decision needs.
+        """
+        for row in self._conn.execute("SELECT doc_id, source_path, content_hash FROM documents"):
+            yield (row["doc_id"], row["source_path"], row["content_hash"])
+
+    def reconcile_source(
+        self,
+        documents: Sequence[IndexedDocument],
+        stale_doc_ids: Iterable[str],
+    ) -> int:
+        """Atomically advance ONE source file: drop ``stale_doc_ids``, upsert ``documents``.
+
+        This is the per-file atomicity unit of a refresh (plan.md Step 4 "interrupted
+        refresh does not leave partial state"). Every delete + insert for the file
+        runs inside ONE transaction, so a crash mid-file leaves the file at its PRIOR
+        state (rolled back), never a torn mix of old and new records. ``stale_doc_ids``
+        are the file's previously-indexed doc_ids that its new parse no longer
+        produces (e.g. a JSONL that shrank); passing them here removes them in the
+        same transaction that lands the new records, so the file transitions cleanly.
+
+        Returns the number of stale documents actually removed.
+        """
+        removed = 0
+        with _transaction(self._conn):
+            for doc_id in stale_doc_ids:
+                existing = self._conn.execute(
+                    "SELECT id FROM documents WHERE doc_id = ?", (doc_id,)
+                ).fetchone()
+                if existing is not None:
+                    self._delete_rowid(int(existing["id"]))
+                    removed += 1
+            for doc in documents:
+                existing = self._conn.execute(
+                    "SELECT id FROM documents WHERE doc_id = ?", (doc.doc_id,)
+                ).fetchone()
+                if existing is not None:
+                    self._delete_rowid(int(existing["id"]))
+                self._insert_document(doc)
+        return removed
+
+    def remove_documents(self, doc_ids: Iterable[str]) -> int:
+        """Delete a batch of documents by ``doc_id`` in ONE transaction.
+
+        Used for whole-file delete reconciliation (a source file that vanished or is
+        now excluded loses ALL its documents). Missing ids are skipped. Returns the
+        number of rows actually removed.
+        """
+        removed = 0
+        with _transaction(self._conn):
+            for doc_id in doc_ids:
+                existing = self._conn.execute(
+                    "SELECT id FROM documents WHERE doc_id = ?", (doc_id,)
+                ).fetchone()
+                if existing is not None:
+                    self._delete_rowid(int(existing["id"]))
+                    removed += 1
+        return removed
+
+    # -- refresh metadata + persisted diagnostics --------------------------- #
+    def set_meta(self, key: str, value: str) -> None:
+        """Upsert a single index-meta ``key`` -> ``value`` (e.g. ``last_refreshed``)."""
+        with _transaction(self._conn):
+            self._conn.execute(
+                "INSERT INTO index_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def get_meta(self, key: str) -> str | None:
+        """Return the value stored for ``key`` in index-meta, or ``None`` if unset."""
+        row = self._conn.execute("SELECT value FROM index_meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else str(row["value"])
+
+    def replace_diagnostics(self, diagnostics: Sequence[Diagnostic]) -> None:
+        """Replace the persisted diagnostic set with ``diagnostics`` in ONE transaction.
+
+        The indexer calls this once per refresh so ``status`` reports the LAST
+        refresh's diagnostics without re-indexing. Each row is path + stable code +
+        message only -- the message never carries file content (plan.md §5 Diagnostic
+        safety contract; enforced by the producing exclusion/adapter code).
+        """
+        with _transaction(self._conn):
+            self._conn.execute("DELETE FROM diagnostics")
+            self._conn.executemany(
+                "INSERT INTO diagnostics (source_path, adapter, severity, code, message) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (d.source_path, d.adapter, d.severity.value, d.code, d.message)
+                    for d in diagnostics
+                ],
+            )
+
+    def get_diagnostics(self) -> list[Diagnostic]:
+        """Return the persisted diagnostics from the last refresh, in insertion order."""
+        rows = self._conn.execute(
+            "SELECT source_path, adapter, severity, code, message FROM diagnostics ORDER BY id"
+        ).fetchall()
+        return [
+            Diagnostic(
+                source_path=row["source_path"],
+                adapter=row["adapter"],
+                severity=Severity(row["severity"]),
+                code=row["code"],
+                message=row["message"],
+            )
+            for row in rows
+        ]

@@ -52,7 +52,9 @@ __all__ = [
     "RootResolutionError",
     "SchemaVersionError",
     "SecretPattern",
+    "evaluate_content",
     "evaluate_file",
+    "evaluate_path",
     "git_ignored",
     "load_config",
     "resolve_root",
@@ -560,22 +562,15 @@ def _excluded(
     )
 
 
-def evaluate_file(
-    config: Config,
-    path: Path,
-    *,
-    content: bytes | None = None,
-    is_git_ignored: bool = False,
-) -> ExclusionDecision:
-    """Decide whether ``path`` may be indexed, applying all exclusion layers.
+def evaluate_path(config: Config, path: Path, *, is_git_ignored: bool = False) -> ExclusionDecision:
+    """Apply the path-only exclusion layers (0-2), touching neither stat nor bytes.
 
-    ``content`` may be passed to reuse bytes the indexer already read for
-    hashing; otherwise the file is read here (and only after the cheap
-    path/size layers have passed, so oversized and denied files are never read).
-    ``is_git_ignored`` is supplied by the indexer (see :func:`git_ignored`).
-
-    On any exclusion the returned diagnostic names the path and a stable
-    code/pattern id only — never file bytes and never a matched secret span.
+    Layers, in order: outside configured roots, path-glob deny (built-in secret
+    globs then operator ``exclude``), and git-ignored. Each needs only the path
+    string, so the indexer runs them BEFORE reading a file -- a path-denied secret
+    file's bytes are never loaded into memory. ``include=True`` means only that
+    these cheap layers passed; the size (stat) ceiling and the content secret scan
+    (:func:`evaluate_content`) still apply before a file may be indexed.
     """
     rel = _rel_posix(config.root, path)
 
@@ -611,39 +606,26 @@ def evaluate_file(
             message="path is git-ignored",
         )
 
-    limit_bytes = config.max_file_kb * 1024
+    return ExclusionDecision(include=True, diagnostic=None)
 
-    # Layer 3: oversized (checked from stat before reading, when possible).
-    if content is None:
-        try:
-            size = path.stat().st_size
-        except OSError as exc:
-            return _excluded(
-                adapter="exclusion",
-                severity=Severity.ERROR,
-                code="read-error",
-                source_path=rel,
-                message=f"could not stat file: {exc.strerror or 'unknown error'}",
-            )
-        if size > limit_bytes:
-            return _excluded(
-                adapter="exclusion",
-                severity=Severity.WARN,
-                code="oversized",
-                source_path=rel,
-                message=f"file size {size} bytes exceeds max_file_kb={config.max_file_kb}",
-            )
-        try:
-            content = path.read_bytes()
-        except OSError as exc:
-            return _excluded(
-                adapter="exclusion",
-                severity=Severity.ERROR,
-                code="read-error",
-                source_path=rel,
-                message=f"could not read file: {exc.strerror or 'unknown error'}",
-            )
-    elif len(content) > limit_bytes:
+
+def evaluate_content(config: Config, path: Path, content: bytes) -> ExclusionDecision:
+    """Apply the content-dependent layers (3 size, 4 secret scan) to already-read bytes.
+
+    ``content`` is the file's bytes, already read by the caller after
+    :func:`evaluate_path` passed. Applies the size ceiling by length, then the
+    secret scan: a file that cannot be cleanly decoded (UTF-16/binary) is skipped
+    (fail-closed) rather than scanned as garbage, and any secret-pattern hit skips
+    the ENTIRE file (never redact-and-index). ``include=True`` means every layer
+    passed and these EXACT bytes may be indexed.
+
+    On exclusion the returned diagnostic names the path + a stable code/pattern id
+    only -- never file bytes and never a matched secret span.
+    """
+    rel = _rel_posix(config.root, path)
+
+    # Layer 3: oversized (by the length of the bytes handed in).
+    if len(content) > config.max_file_kb * 1024:
         return _excluded(
             adapter="exclusion",
             severity=Severity.WARN,
@@ -652,10 +634,10 @@ def evaluate_file(
             message=f"file size {len(content)} bytes exceeds max_file_kb={config.max_file_kb}",
         )
 
-    # Layer 4: content-based secret scan. A hit skips the ENTIRE file.
-    # First get scannable text; a file we cannot cleanly decode (UTF-16/binary)
-    # is skipped rather than scanned as garbage -- fail closed, never index a
-    # mangled-but-secret-bearing file.
+    # Layer 4: content-based secret scan. A hit skips the ENTIRE file. First get
+    # scannable text; a file we cannot cleanly decode (UTF-16/binary) is skipped
+    # rather than scanned as garbage -- fail closed, never index a mangled-but-
+    # secret-bearing file.
     scan_text = _decode_for_scan(content)
     if scan_text is None:
         return _excluded(
@@ -677,3 +659,60 @@ def evaluate_file(
         )
 
     return ExclusionDecision(include=True, diagnostic=None)
+
+
+def evaluate_file(
+    config: Config,
+    path: Path,
+    *,
+    content: bytes | None = None,
+    is_git_ignored: bool = False,
+) -> ExclusionDecision:
+    """Decide whether ``path`` may be indexed, applying all exclusion layers.
+
+    Composes :func:`evaluate_path` (cheap path-only layers, no read) with
+    :func:`evaluate_content` (size + secret scan). ``content`` may be passed to
+    reuse bytes the caller already read; otherwise the file is read here, and only
+    after the path layers pass and its stat size is within ``max_file_kb`` -- so a
+    path-denied or oversized file is never read. ``is_git_ignored`` is supplied by
+    the indexer (see :func:`git_ignored`).
+
+    On any exclusion the returned diagnostic names the path and a stable
+    code/pattern id only -- never file bytes and never a matched secret span.
+    """
+    path_decision = evaluate_path(config, path, is_git_ignored=is_git_ignored)
+    if not path_decision.include:
+        return path_decision
+
+    if content is None:
+        rel = _rel_posix(config.root, path)
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            return _excluded(
+                adapter="exclusion",
+                severity=Severity.ERROR,
+                code="read-error",
+                source_path=rel,
+                message=f"could not stat file: {exc.strerror or 'unknown error'}",
+            )
+        if size > config.max_file_kb * 1024:
+            return _excluded(
+                adapter="exclusion",
+                severity=Severity.WARN,
+                code="oversized",
+                source_path=rel,
+                message=f"file size {size} bytes exceeds max_file_kb={config.max_file_kb}",
+            )
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            return _excluded(
+                adapter="exclusion",
+                severity=Severity.ERROR,
+                code="read-error",
+                source_path=rel,
+                message=f"could not read file: {exc.strerror or 'unknown error'}",
+            )
+
+    return evaluate_content(config, path, content)
