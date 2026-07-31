@@ -49,8 +49,9 @@ from find_again.search import SearchQuery, search
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-# Target root is the real dev workspace, read-only (overridable for portability).
-DEV_ROOT = Path(os.environ.get("FIND_AGAIN_BENCH_ROOT", r"C:\Users\abero\dev"))
+# Target root defaults to the current working directory; set FIND_AGAIN_BENCH_ROOT
+# to point at the workspace to index (read-only).
+DEV_ROOT = Path(os.environ.get("FIND_AGAIN_BENCH_ROOT", os.getcwd()))
 
 # A SAFE, EXPLICIT, BOUNDED sample: the dirs that hold the pre-registered targets.
 SAMPLE_ROOTS: tuple[str, ...] = ("docs", ".claude/rules", ".claude/task-state")
@@ -656,7 +657,7 @@ def _render_findings(
                     f"secret-scanner excluded the whole file (diagnostic "
                     f"`{tr.exclusion_reason}`). The trigger is the `high-entropy-token` "
                     "heuristic firing on long path/identifier strings that are common in "
-                    "dev-memory docs (e.g. a 56-char `Alpha4Gate/...` memory slug and an "
+                    "dev-memory docs (e.g. a 56-char `<project>/...` memory slug and an "
                     "85-char `claude/projects/.../feedback_..._grade` reference) -- not real "
                     f"secrets. This is **systemic, not isolated**: {secret_content_total} files "
                     "on this sample were dropped by the content scanner the same way, so the "
