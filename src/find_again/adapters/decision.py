@@ -2,7 +2,7 @@
 
 A decision record is a Markdown file with a leading ``---``-fenced frontmatter block.
 This adapter indexes it through a FORMAT CONTRACT only -- the frontmatter keys pinned
-in Paper Trail's plan (``../../paper-trail/plans/plan.md``, frozen at its Step 1):
+in Paper Trail's plan (frozen at its Step 1):
 ``id``, ``title``, ``status``, ``review_date``. It surfaces those pinned keys as
 searchable text plus a locator, TOLERATES any unknown keys (they are still indexed),
 and FALLS BACK to plain-Markdown indexing of the whole file when no frontmatter

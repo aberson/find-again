@@ -445,8 +445,8 @@ def _has_high_entropy_token(text: str) -> bool:
     JWT / assigned-credential patterns above are the real secret detectors; this
     generic fallback exists only to catch an un-prefixed random blob, and must NOT
     fire on the long path/identifier strings that fill dev-memory docs (e.g. a
-    56-char ``Alpha4Gate/.../feedback_grade`` path slug or an 85-char
-    ``c--Users-.../feedback_..._grade`` reference). Over-skipping those silently
+    56-char ``example-project/.../reference_note`` path slug or an 85-char
+    ``example--nested--slug/.../reference_note`` reference). Over-skipping those silently
     drops the whole file from the index -- a real retrieval gap -- which is why the
     *shape* of a random secret is required here, not merely high entropy.
 
