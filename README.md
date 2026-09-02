@@ -81,3 +81,24 @@ src/find_again/
 The decision-record adapter reads YAML-frontmatter Markdown as a **format contract** (indexed keys
 pinned in paper-trail's plan) — no build dependency on Paper Trail shipping. See
 [plans/plan.md](plans/plan.md) for the full component + field pins.
+
+## Sibling utilities
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/utility-family-dark.svg">
+  <img alt="Seven local-first utilities around one dev session. Opening the session: find-again recovers the context, heads-up claims the work, tripwire preflights the command. Closing the session: changed-check validates the change, same-page reconciles the status, mesh-lens measures the routing. Across sessions: paper-trail records the decision." src="assets/utility-family-light.svg">
+</picture>
+
+One of seven local-first utilities for a dev workspace. Each is a standalone CLI with no shared
+runtime and no cross-imports; where two of them meet, the seam is a file-format contract, so any
+one of them can be replaced without touching the others.
+
+- [find-again](https://github.com/aberson/find-again) - local full-text search across dev-memory artifacts (you are here)
+- [heads-up](https://github.com/aberson/heads-up) - advisory expiring claims across parallel sessions
+- [tripwire](https://github.com/aberson/tripwire) - preflight checks on repo state and commands
+- [changed-check](https://github.com/aberson/changed-check) - narrowest declared validation for a change set
+- [same-page](https://github.com/aberson/same-page) - deterministic contradiction detection across status artifacts
+- [mesh-lens](https://github.com/aberson/mesh-lens) - cohort analysis of skill and model telemetry
+- [paper-trail](https://github.com/aberson/paper-trail) - immutable decision records with explicit supersession
+
+More at [github.com/aberson](https://github.com/aberson) and [aberson.github.io](https://aberson.github.io).
